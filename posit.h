@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <x86intrin.h>
 
 //=========== CONSTANTS ===============//
 
@@ -21,10 +22,10 @@
 
 #define POSIT_ES 2
 
-#define POSIT_SHORT CONCAT4(p,POSIT_BW,e,POSIT_ES)
+#define POSIT_SHORT CONCAT(p,POSIT_BW)
 #define QUIRE_SHORT CONCAT(q,POSIT_BW)
 
-#define POSIT_T CONCAT5(posit,POSIT_BW,e,POSIT_ES,_t)
+#define POSIT_T CONCAT3(posit,POSIT_BW,_t)
 #define QUIRE_T CONCAT3(quire,POSIT_BW,_t)
 
 #ifndef POSIT_BACKING_T
@@ -51,7 +52,7 @@
  #elif POSIT_BW == 64
   #define QUIRE_T quire64_t
  #else
-  #define QUIRE_T quire_t
+  #define QUIRE_T CONCAT3(quire_,POSIT_BW,_t)
  #endif
 #endif
 
@@ -105,6 +106,9 @@ struct unpacked_double {
 
 static inline __attribute__((always_inline))
 int64_t minll(int64_t a, int64_t b) { return a < b ? a : b; }
+
+static inline __attribute__((always_inline))
+int64_t maxll(int64_t a, int64_t b) { return a < b ? b : a; }
 
 static inline __attribute__((always_inline))
 int64_t absll(int64_t a) { return a < 0 ? -a : a; }
@@ -201,15 +205,12 @@ double CONCAT(POSIT_SHORT,_to_double)(POSIT_T val) {
 
 	struct UNPACKED_POSIT parts = POSIT_UNPACK(val);
 
-	int64_t exponent;
-	uint64_t mantissa;
-	if (parts.s) {
-		mantissa = - extract_bits((uint64_t)parts.f, 64 - POSIT_BW, 52) & DOUBLE_MANTISSA_MASK;
-		exponent = - (int)(1 << POSIT_ES) * parts.r + parts.e - (parts.f > 0);
-	} else {
-		exponent = (int)(1 << POSIT_ES) * parts.r + parts.e;
-		mantissa = extract_bits((uint64_t)parts.f, 64 - POSIT_BW, 52);
-	}
+	uint64_t mantissa =
+		((1 - (parts.s << 1)) * extract_bits(parts.f, 64 - POSIT_BW, 52))
+		& DOUBLE_MANTISSA_MASK;
+	int64_t exponent =
+		(1 - (parts.s << 1))
+		* (parts.r * (1 << POSIT_ES) + parts.e + (parts.s & (parts.f > 0)));
 
 	union{uint64_t bits; double value;} result;
 	result.bits =
@@ -311,73 +312,145 @@ size_t CONCAT(POSIT_SHORT,_to_bits)(char *buf, size_t len, POSIT_T p) {
 }
 
 void CONCAT3(QUIRE_SHORT,_add_,POSIT_SHORT)(QUIRE_T *q, POSIT_T p) {
-
 	if (p.bits == 0ULL) { return; }
 
 	if (p.bits == POSIT_NAR) {
 		q->words[QUIRE_WORDS - 1] = QUIRE_SIGN_MASK;
-		for (int i = 0; i < QUIRE_WORDS - 1; ++i) {
+		for (uint64_t i = 0; i < QUIRE_WORDS - 1; ++i) {
 			q->words[i] = 0;
 		}
 		return;
 	}
 
-	{
-		int is_nar = q->words[QUIRE_WORDS - 1] == QUIRE_SIGN_MASK;
-		for (int i = 0; i < QUIRE_WORDS - 1; ++i) {
-			is_nar &= q->words[i] == 0;
-		}
-		if (is_nar) { return; }
+    if (q->words[QUIRE_WORDS - 1] != QUIRE_SIGN_MASK) goto ok;
+	for (uint64_t i = 0; i < QUIRE_WORDS - 1; ++i) {
+		if (q->words[i] != 0) goto ok;
 	}
+	return;
+    ok:;
 
 	struct UNPACKED_POSIT parts = POSIT_UNPACK(p);
 
 	int64_t shift =
 		(8 * POSIT_BW - 16) - 63
-		+ (parts.s
-			? (-(1LL << POSIT_ES) * parts.r + parts.e - 1)
-			: ( (1LL << POSIT_ES) * parts.r + parts.e));
+		+ (1ULL - (parts.s << 1)) * ((1ULL << POSIT_ES) * parts.r + parts.e);
 
-	uint64_t bits =
-		(uint64_t)!parts.s << 63
-		| (uint64_t)parts.f << (64 - POSIT_BW) >> 1;
+	uint64_t bits = 1ULL << 63
+		| (uint64_t)parts.f << (64 - POSIT_BW) >> (1 + parts.s);
 
-	uint64_t fill_word = parts.s ? -1ULL : 0;
-	uint64_t carry = 0;
+	uint64_t fill_word = parts.s * -1ULL;
 	
+	uint64_t hi_bits = fill_word << (shift & 63);
+	if (shift & 63) { hi_bits |= bits >> (64 - (shift & 63)); }
 	uint64_t lo_bits = bits << (shift & 63);
-	uint64_t hi_bits = fill_word;
-	if (shift & 63) {
-		hi_bits &= ~(-1ULL >> (64 - (shift & 63)));
-		hi_bits |= bits >> (64 - (shift & 63));
+
+	uint64_t words[QUIRE_WORDS + 1] = {0};
+
+	words[(shift >> 6) + 1] = lo_bits;
+	words[(shift >> 6) + 2] = hi_bits;
+	for(uint64_t i = (shift >> 6) + 3; i < QUIRE_WORDS+1; i++) {
+		words[i] = fill_word;
 	}
 
-	if (shift >= 0) {
-		uint64_t prev = q->words[shift >> 6];
-		uint64_t word = lo_bits;
-		uint64_t add = prev + word;
-		carry = add < prev;
-		q->words[shift >> 6] = add;
+	uint64_t carry = 0;
+	for(int64_t i = 0; i < QUIRE_WORDS; i++) {
+		carry = _addcarry_u64(
+				carry,
+				q->words[i],
+				words[i+1],
+				(unsigned long long *)&q->words[i]
+		);
 	}
 
-	if ((shift & 63) || carry) {
-		uint64_t prev = q->words[(shift >> 6) + 1];
-		uint64_t word = hi_bits;
-		uint64_t add = prev + word + carry;
-		q->words[(shift >> 6) + 1] = add;
-		carry = fill_word + (add < prev || add < word);
+	// discard any overflows
+	q->words[QUIRE_WORDS - 1] &= (QUIRE_SIGN_MASK << 1) - 1;
+}
+
+void CONCAT3(QUIRE_SHORT,_fmadd_,POSIT_SHORT)(QUIRE_T *q, POSIT_T p1, POSIT_T p2) {
+	
+	if (p1.bits == 0ULL) { return; }
+	if (p2.bits == 0ULL) { return; }
+
+	if (p1.bits == POSIT_NAR) {
+		q->words[QUIRE_WORDS - 1] = QUIRE_SIGN_MASK;
+		for (uint64_t i = 0; i < QUIRE_WORDS - 1; ++i) {
+			q->words[i] = 0;
+		}
+		return;
 	}
 
-	// propagate the carry
-	uint64_t i = (shift >> 6) + 2;
-	for(; carry && i < QUIRE_WORDS; ++i) {
-		uint64_t word = carry;
-		uint64_t prev = q->words[i];
-		uint64_t add  = word + prev;
-		carry = fill_word + (add < word);
-		q->words[i] += word;
+	if (p2.bits == POSIT_NAR) {
+		q->words[QUIRE_WORDS - 1] = QUIRE_SIGN_MASK;
+		for (uint64_t i = 0; i < QUIRE_WORDS - 1; ++i) {
+			q->words[i] = 0;
+		}
+		return;
 	}
 
+    if (q->words[QUIRE_WORDS - 1] != QUIRE_SIGN_MASK) goto ok;
+	for (uint64_t i = 0; i < QUIRE_WORDS - 1; ++i) {
+		if (q->words[i] != 0) goto ok;
+	}
+	return;
+    ok:;
+	struct UNPACKED_POSIT parts1 = POSIT_UNPACK(p1);
+	struct UNPACKED_POSIT parts2 = POSIT_UNPACK(p2);
+
+	int64_t shift1 = (1ULL - (parts1.s << 1))
+		* ((1ULL << POSIT_ES) * parts1.r + parts1.e);
+
+	int64_t shift2 = (1ULL - (parts2.s << 1))
+		* ((1ULL << POSIT_ES) * parts2.r + parts2.e);
+
+	uint64_t fill_word = -((uint64_t)parts1.s ^ (uint64_t)parts2.s);
+	int64_t shift = shift1 + shift2 + (8 * POSIT_BW - 16) - 126;
+	uint64_t f1 = 1ULL << 63
+		| (uint64_t)parts1.f << (64 - POSIT_BW) >> (1 + parts1.s);
+	uint64_t f2 = 1ULL << 63
+		| (uint64_t)parts2.f << (64 - POSIT_BW) >> (1 + parts2.s);
+
+	// awkward sign extension: can this be done better?
+	__uint128_t f =
+		((__uint128_t)f1 | ((__uint128_t)-(uint64_t)parts1.s)<<64) *
+		((__uint128_t)f2 | ((__uint128_t)-(uint64_t)parts2.s)<<64) ;
+
+	uint64_t hi_bits = fill_word << (shift & 63);
+	if (shift & 63) { hi_bits |= f >> (128 - (shift & 63)); }
+	uint64_t md_bits = f >> (64 - (shift & 63));
+	uint64_t lo_bits = f << (shift & 63);
+
+	uint64_t words[QUIRE_WORDS + 2] = {0};
+	words[(shift >> 6) + 1] = lo_bits;
+	words[(shift >> 6) + 2] = md_bits;
+	words[(shift >> 6) + 3] = hi_bits;
+	for(uint64_t i = (shift >> 6) + 4; i < QUIRE_WORDS+1; i++) {
+		words[i] = fill_word;
+	}
+
+	uint64_t carry = 0;
+	for(int64_t i = 0; i < QUIRE_WORDS; i++) {
+		carry = _addcarry_u64(
+				carry,
+				q->words[i],
+				words[i+1],
+				(unsigned long long *)&q->words[i]
+		);
+	}
+
+	// discard any overflows
+	q->words[QUIRE_WORDS - 1] &= (QUIRE_SIGN_MASK << 1) - 1;
+}
+
+void CONCAT(QUIRE_SHORT,_negate)(QUIRE_T *q) {
+	uint64_t carry = 1;
+	for(int64_t i = 0; i < QUIRE_WORDS; i++) {
+		carry = _addcarry_u64(
+				carry,
+				~q->words[i],
+				0,
+				(unsigned long long *)&q->words[i]
+		);
+	}
 	// discard any overflows
 	q->words[QUIRE_WORDS - 1] &= (QUIRE_SIGN_MASK << 1) - 1;
 }

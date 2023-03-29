@@ -1,13 +1,14 @@
 CC    = gcc
-FLAGS = -Wall -Wextra --pedantic -std=c11 -lm -ffast-math
-# -fsanitize=undefined
-OPT   = -O3 -march=native
+FLAGS = -Wall -Wextra --pedantic -std=c11 -lm -g3 # -fsanitize=undefined
+OPT   = -O2
 
-test: main
-	./main
+default: test
 
-main: main.c posit.h
-	$(CC) -omain main.c $(FLAGS) $(OPT)
+test: testbin
+	./testbin
+
+testbin: test.c testing_utils.h posit.h
+	$(CC) -otestbin test.c $(FLAGS) $(OPT)
 
 clean:
-	$(RM) main
+	$(RM) testbin

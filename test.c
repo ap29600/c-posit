@@ -20,8 +20,12 @@ int64_t random_int(int64_t max_modulus, bool include_negatives) {
 
 double absf(double d) { return d >= 0 ? d : -d; }
 
-#define POSIT_BW 32
-const uint64_t test_size = 100000;
+// Note: it only makes sense for these tests to use BW <= 56, as above this value
+// posit is not uniformly less precise than double, which can lead to false positives.
+#define POSIT_BW 56
+#define POSIT_SHORT pos
+#define POSIT_T posit_t
+const uint64_t test_size = 10000;
 const uint64_t p_int_max = 1LL << (4 * (POSIT_BW - 3) / 5);
 const uint64_t p_expt_max =  4 * (POSIT_BW - 4);
 #define POSIT_IMPLEMENTATION
@@ -33,8 +37,8 @@ bool integer_conversion(void) {
 
 	for (uint64_t i = 0; i < test_size; i++) {
 		int64_t n = random_int(p_int_max, true);
-		posit32_t p = p32_from_i64(n);
-		double d = p32_to_double(p);
+		posit_t p = pos_from_i64(n);
+		double d = pos_to_double(p);
 		expect(&t, d == n);
 	}
 
@@ -47,11 +51,11 @@ bool double_conversion(void) {
 
 	for (uint64_t i = 0; i < test_size; i++) {
 		double n = random_double(p_expt_max, true);
-		posit32_t p = p32_from_double(n);
+		posit_t p = pos_from_double(n);
 
-		double low = p32_to_double(p32_prev(p));
-		double rounded = p32_to_double(p);
-		double high = p32_to_double(p32_next(p));
+		double low = pos_to_double(pos_prev(p));
+		double rounded = pos_to_double(p);
+		double high = pos_to_double(pos_next(p));
 
 		expect(&t, absf(rounded - n) <= absf(high - n));
 		expect(&t, absf(rounded - n) <= absf(low - n));
@@ -68,10 +72,10 @@ bool posit_product(void) {
 		int64_t n = random_int(sqrt(p_int_max), true);
 		int64_t m = random_int(sqrt(p_int_max), true);
 
-		posit32_t p = p32_from_i64(n);
-		posit32_t q = p32_from_i64(m);
+		posit_t p = pos_from_i64(n);
+		posit_t q = pos_from_i64(m);
 
-		double d = p32_to_double(p32_mul(p, q));
+		double d = pos_to_double(pos_mul(p, q));
 		expect(&t, d == n * m);
 	}
 
@@ -81,7 +85,7 @@ bool posit_product(void) {
 
 bool posit_unary_internal(
 	const char *func,
-	posit32_t posit_fn(posit32_t),
+	posit_t posit_fn(posit_t),
 	double double_fn(double),
 	uint64_t max_expt,
 	bool include_negatives
@@ -90,13 +94,13 @@ bool posit_unary_internal(
 
 	for (uint64_t i = 0; i < test_size; ++i) {
 		double d      = random_double(max_expt, include_negatives);
-		posit32_t p   = p32_from_double(d);
-		posit32_t r   = posit_fn(p);
-		double target = double_fn(p32_to_double(p));
+		posit_t p   = pos_from_double(d);
+		posit_t r   = posit_fn(p);
+		double target = double_fn(pos_to_double(p));
 
-		double low     = p32_to_double(p32_prev(r));
-		double rounded = p32_to_double(r);
-		double high    = p32_to_double(p32_next(r));
+		double low     = pos_to_double(pos_prev(r));
+		double rounded = pos_to_double(r);
+		double high    = pos_to_double(pos_next(r));
 
 		expect(&t, absf(rounded - target) <= absf(high - target));
 		expect(&t, absf(rounded - target) <= absf(low  - target));
@@ -109,7 +113,7 @@ bool posit_unary_internal(
 
 bool posit_binary_internal(
 	const char *func,
-	posit32_t posit_fn(posit32_t, posit32_t),
+	posit_t posit_fn(posit_t, posit_t),
 	double double_fn(double, double),
 	uint64_t max_expt,
 	bool include_negatives
@@ -117,18 +121,18 @@ bool posit_binary_internal(
 	test t = {.func = func};
 
 	for (uint64_t i = 0; i < test_size; ++i) {
-		double d      = random_double(max_expt, include_negatives);
-		double b      = random_double(max_expt, include_negatives);
+		double d = random_double(max_expt, include_negatives);
+		double b = random_double(max_expt, include_negatives);
 
-		posit32_t p   = p32_from_double(d);
-		posit32_t q   = p32_from_double(b);
+		posit_t p = pos_from_double(d);
+		posit_t q = pos_from_double(b);
 
-		posit32_t r   = posit_fn(p, q);
-		double target = double_fn(p32_to_double(p), p32_to_double(q));
+		posit_t r = posit_fn(p, q);
+		double target = double_fn(pos_to_double(p), pos_to_double(q));
 
-		double low     = p32_to_double(p32_prev(r));
-		double rounded = p32_to_double(r);
-		double high    = p32_to_double(p32_next(r));
+		double low     = pos_to_double(pos_prev(r));
+		double rounded = pos_to_double(r);
+		double high    = pos_to_double(pos_next(r));
 
 		expect(&t, absf(rounded - target) <= absf(high - target));
 		expect(&t, absf(rounded - target) <= absf(low  - target));
@@ -139,7 +143,7 @@ bool posit_binary_internal(
 }
 #define posit_binary(p, d, m, i) posit_binary_internal(#p, (p), (d), (m), (i))
 
-static double double_reciprocal (double d) { return 1 / d; }
+static double double_inverse(double d)       { return 1 / d; }
 static double double_add(double d, double b) { return d + b; }
 static double double_mul(double d, double b) { return d * b; }
 
@@ -149,10 +153,10 @@ int main (void) {
 	ok &= integer_conversion();
 	ok &= double_conversion();
 	ok &= posit_product();
-	ok &= posit_unary(p32_sqrt, sqrt, p_expt_max, false);
-	ok &= posit_unary(p32_reciprocal, double_reciprocal, p_expt_max, true);
-	ok &= posit_binary(p32_add, double_add, p_expt_max - 1, true);
-	ok &= posit_binary(p32_mul, double_mul, p_expt_max / 2, true);
+	ok &= posit_unary(pos_sqrt, sqrt, p_expt_max, false);
+	ok &= posit_unary(pos_inverse, double_inverse, p_expt_max, true);
+	ok &= posit_binary(pos_add, double_add, p_expt_max - 1, true);
+	ok &= posit_binary(pos_mul, double_mul, p_expt_max / 2, true);
 	return ok ? EXIT_SUCCESS : EXIT_FAILURE;
 }
 

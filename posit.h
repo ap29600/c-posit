@@ -16,6 +16,8 @@
 #define BITRANGE(a, b) ((uint64_t)((__uint128_t)1 << (a)) - (1ULL << (b)))
 #define POSIT_UNPACK(bits) CONCAT(POSIT_SHORT,_unpack)(bits)
 
+#define POSIT_IMPLEMENTATION
+
 #define UNPACKED_POSIT UNPACKED_POSIT
 
 #ifndef POSIT_BW
@@ -25,11 +27,20 @@
 #define POSIT_ES 2
 #define QUIRE_BW (16*POSIT_BW)
 
-#define POSIT_SHORT CONCAT(p,POSIT_BW)
-#define QUIRE_SHORT CONCAT(q,POSIT_BW)
+#ifndef POSIT_SHORT
+ #define POSIT_SHORT CONCAT(p,POSIT_BW)
+#endif
 
-#define POSIT_T CONCAT3(posit,POSIT_BW,_t)
-#define QUIRE_T CONCAT3(quire,POSIT_BW,_t)
+#ifndef QUIRE_SHORT
+ #define QUIRE_SHORT CONCAT(q,POSIT_BW)
+#endif
+
+#ifndef POSIT_T
+ #define POSIT_T CONCAT3(posit,POSIT_BW,_t)
+#endif
+#ifndef QUIRE_T
+ #define QUIRE_T CONCAT3(quire,POSIT_BW,_t)
+#endif
 
 #ifndef POSIT_BACKING_T
  #if   POSIT_BW <= 8
@@ -95,7 +106,7 @@ POSIT_T CONCAT(POSIT_SHORT,_from_i64)    (int64_t i);
 POSIT_T CONCAT(POSIT_SHORT,_from_double) (double  d);
 double  CONCAT(POSIT_SHORT,_to_double)   (POSIT_T p);
 POSIT_T CONCAT(POSIT_SHORT,_negate)      (POSIT_T p);
-POSIT_T CONCAT(POSIT_SHORT,_reciprocal)  (POSIT_T p);
+POSIT_T CONCAT(POSIT_SHORT,_inverse)     (POSIT_T p);
 POSIT_T CONCAT(POSIT_SHORT,_next)        (POSIT_T p);
 POSIT_T CONCAT(POSIT_SHORT,_prev)        (POSIT_T p);
 POSIT_T CONCAT(POSIT_SHORT,_sqrt)        (POSIT_T p);
@@ -193,7 +204,7 @@ POSIT_T CONCAT(POSIT_SHORT,_build)(uint64_t sign, int64_t exponent, POSIT_BACKIN
 	POSIT_BACKING_T b = 0
 		| (POSIT_BACKING_T)!R << (POSIT_BW - 2)
 		| e << (POSIT_BW - 2 - POSIT_ES)
-		| fraction;
+		| fraction >> (8 * sizeof(fraction) - POSIT_BW + POSIT_ES + 2);
 
 	POSIT_BACKING_T value = 0
 		| (POSIT_BACKING_T)sign << (POSIT_BW - 1)
@@ -211,8 +222,7 @@ POSIT_T CONCAT(POSIT_SHORT,_from_i64) (int64_t i) {
 	if(lz == 64) { return (POSIT_T){0}; }
 
 	int64_t exponent = 64 - lz - 1;
-	uint64_t fraction = u << lz >> (64 - POSIT_BW + POSIT_ES + 1);
-	fraction &= BITRANGE(POSIT_BW - POSIT_ES - 2, 0);
+	POSIT_BACKING_T fraction = u << lz << 1 >> 8 * (sizeof(int64_t) - sizeof(POSIT_BACKING_T));
 
 	POSIT_T result = CONCAT(POSIT_SHORT,_build)(0, exponent, fraction);
 	return i >= 0 ? result : CONCAT(POSIT_SHORT,_negate)(result);
@@ -234,7 +244,7 @@ POSIT_T CONCAT(POSIT_SHORT,_from_double)(double val) {
 		fraction = -fraction & BITRANGE(52, 0);
 	}
 	fraction <<= 12;
-	fraction >>= 64 - POSIT_BW + POSIT_ES + 2;
+	fraction >>= 8 * (sizeof(uint64_t) - sizeof(POSIT_BACKING_T));
 
 	return CONCAT(POSIT_SHORT,_build)(parts.sign, exponent, fraction);
 }
@@ -256,7 +266,7 @@ struct UNPACKED_POSIT POSIT_UNPACK(POSIT_T p) {
 	uint64_t k  = __builtin_clzll(((((uint64_t)p.bits ^ -r0) << 1) & POSIT_MASK) | 1) - (64 - POSIT_BW);
 	uint64_t r  = r0 ? k - 1 : -k;
 	uint64_t e  = ((uint64_t)p.bits << k >> (POSIT_BW - 2 - POSIT_ES)) & BITRANGE(POSIT_ES, 0);
-	uint64_t f  = ((uint64_t)p.bits << k << (POSIT_ES + 2)) & BITRANGE(POSIT_BW, 0);
+	uint64_t f  = (uint64_t)p.bits << k << (8 * sizeof(POSIT_BACKING_T) - POSIT_BW + POSIT_ES + 2);
 
 	result.s = s;
 	result.r0 = r0;
@@ -276,7 +286,7 @@ double CONCAT(POSIT_SHORT,_to_double)(POSIT_T val) {
 
 	uint64_t posit_fraction = 1
 		* (1 - (parts.s << 1))
-		* ((uint64_t)parts.f << (64 - POSIT_BW) >> 1);
+		* ((uint64_t)parts.f << 8 * (sizeof(uint64_t) - sizeof(POSIT_BACKING_T)) >> 1);
 	uint64_t mantissa = posit_fraction >> (64 - 52 - 1);
 	uint64_t roundup = (posit_fraction >> (64 - 52 - 2)) & 1;
 
@@ -344,7 +354,7 @@ POSIT_T CONCAT(POSIT_SHORT,_prev)(POSIT_T val) {
 	return (POSIT_T){.bits = (val.bits - 1) & POSIT_MASK};
 }
 
-POSIT_T CONCAT(POSIT_SHORT,_reciprocal)(POSIT_T p) {
+POSIT_T CONCAT(POSIT_SHORT,_inverse)(POSIT_T p) {
 	if (p.bits == POSIT_NAR) { return p; }
 	if (p.bits == 0) { return (POSIT_T){POSIT_NAR}; }
 
@@ -353,7 +363,7 @@ POSIT_T CONCAT(POSIT_SHORT,_reciprocal)(POSIT_T p) {
 	// TODO: figure out the correct logic for negative numbers.
 	if (parts.s) {
 		POSIT_T n = CONCAT(POSIT_SHORT,_negate)(p);
-		POSIT_T rn = CONCAT(POSIT_SHORT,_reciprocal)(n);
+		POSIT_T rn = CONCAT(POSIT_SHORT,_inverse)(n);
 		return CONCAT(POSIT_SHORT,_negate)(rn);
 	}
 
@@ -362,13 +372,14 @@ POSIT_T CONCAT(POSIT_SHORT,_reciprocal)(POSIT_T p) {
 		* (parts.r * (1 << POSIT_ES) + parts.e)
 		* -1;
 
-	POSIT_EXTENDED_T one = (POSIT_EXTENDED_T)1ULL << (2 * POSIT_BW - 1);
-	POSIT_BACKING_T xf = POSIT_NAR | parts.f >> 1;
-	POSIT_BACKING_T quot = (one / (POSIT_EXTENDED_T)xf) & POSIT_MASK;
+	POSIT_EXTENDED_T one = (POSIT_EXTENDED_T)1ULL << (8 * sizeof(POSIT_EXTENDED_T) - 1);
+	POSIT_BACKING_T xf = 0
+		| (POSIT_BACKING_T)1 << (8 * sizeof(POSIT_BACKING_T) - 1)
+		| parts.f >> 1;
+	POSIT_BACKING_T quot = one / (POSIT_EXTENDED_T)xf;
 
 	exponent -= quot > 0;
-	quot >>= 2 + POSIT_ES - 1;
-	quot &= BITRANGE(POSIT_BW - POSIT_ES - 2, 0);
+	quot <<= 1;
 
 	return CONCAT(POSIT_SHORT,_build)(parts.s, exponent, quot);
 }
@@ -386,10 +397,10 @@ POSIT_T CONCAT(POSIT_SHORT,_sqrt) (POSIT_T p) {
 
 
 	POSIT_BACKING_T f = 0
-		| (POSIT_BACKING_T)1 << (POSIT_BW - 1)
+		| (POSIT_BACKING_T)1 << (8 * sizeof(POSIT_BACKING_T) - 1)
 		| parts.f >> 1;
 
-	POSIT_EXTENDED_T t = (POSIT_EXTENDED_T)f << (POSIT_BW - 1 - exponent_rem);
+	POSIT_EXTENDED_T t = (POSIT_EXTENDED_T)f << (8 * sizeof(POSIT_BACKING_T) - 1 - exponent_rem);
 	POSIT_BACKING_T residual = 0;
 
 	// Newton Iteration
@@ -401,11 +412,9 @@ POSIT_T CONCAT(POSIT_SHORT,_sqrt) (POSIT_T p) {
 
 	f -= ((POSIT_EXTENDED_T)f * (POSIT_EXTENDED_T)f) > t;
 
-	uint64_t lz = clz(f) - (8 * sizeof(f) - POSIT_BW);
+	uint64_t lz = clz(f);
 	new_exponent -= lz;
 	f <<= lz + 1;
-	f >>= POSIT_ES + 2;
-	f &= BITRANGE(POSIT_BW - POSIT_ES - 2, 0);
 
 	return CONCAT(POSIT_SHORT,_build)(0, new_exponent, f);
 }
@@ -419,39 +428,37 @@ POSIT_T CONCAT(POSIT_SHORT,_add) (POSIT_T p1, POSIT_T p2) {
 	struct UNPACKED_POSIT parts1 = POSIT_UNPACK(p1);
 	struct UNPACKED_POSIT parts2 = POSIT_UNPACK(p2);
 
-	int64_t shift1 = 1
+	int64_t exp1 = 1
 		* (1ULL - (parts1.s << 1))
 		* ((1ULL << POSIT_ES) * parts1.r + parts1.e);
 
-	int64_t shift2 = 1
+	int64_t exp2 = 1
 		* (1ULL - (parts2.s << 1))
 		* ((1ULL << POSIT_ES) * parts2.r + parts2.e);
 
-	int64_t shift = maxll(shift1, shift2);
+	int64_t exp = maxll(exp1, exp2);
 
 	POSIT_EXTENDED_T f1 = 0
-		| -(POSIT_EXTENDED_T)parts1.s << (POSIT_BW - shift + shift1)
-		| 1ULL << (POSIT_BW - 1 - shift + shift1)
-		| (POSIT_EXTENDED_T)parts1.f >> (1 + shift - shift1 + parts1.s);
+		| -(POSIT_EXTENDED_T)parts1.s << (8 * sizeof(POSIT_BACKING_T) - exp + exp1)
+		| (POSIT_EXTENDED_T)1 << (8 * sizeof(POSIT_BACKING_T) - 1 - exp + exp1)
+		| (POSIT_EXTENDED_T)parts1.f >> (1 + exp - exp1 + parts1.s);
 
 	POSIT_EXTENDED_T f2 = 0
-		| -(POSIT_EXTENDED_T)parts2.s << (POSIT_BW - shift + shift2)
-		| 1ULL << (POSIT_BW - 1 - shift + shift2)
-		| (POSIT_EXTENDED_T)parts2.f >> (1 + shift - shift2 + parts2.s);
+		| -(POSIT_EXTENDED_T)parts2.s << (8 * sizeof(POSIT_BACKING_T) - exp + exp2)
+		| (POSIT_EXTENDED_T)1 << (8 * sizeof(POSIT_BACKING_T) - 1 - exp + exp2)
+		| (POSIT_EXTENDED_T)parts2.f >> (1 + exp - exp2 + parts2.s);
 
-	f1 = (shift - shift1 < POSIT_BW) * f1;
-	f2 = (shift - shift2 < POSIT_BW) * f2;
+	f1 = ((uint64_t)(exp - exp1) < 8 * sizeof(POSIT_BACKING_T)) * f1;
+	f2 = ((uint64_t)(exp - exp2) < 8 * sizeof(POSIT_BACKING_T)) * f2;
 
 	POSIT_EXTENDED_T f = f1 + f2;
-	uint64_t sign = (f >> (2 * POSIT_BW - 1)) & 1;
-	uint64_t lz = clz(f ^ -(POSIT_EXTENDED_T)sign) - (sizeof(f) * 8 - 2 * POSIT_BW);
-
+	uint64_t sign = (f >> (8 * sizeof(POSIT_EXTENDED_T) - 1)) & 1;
+	uint64_t lz = clz(f ^ -(POSIT_EXTENDED_T)sign);
 	if (f == 0) { return (POSIT_T){0}; }
 	f <<= lz + 1;
-	f >>= POSIT_BW + POSIT_ES + 2;
-	f &= BITRANGE(POSIT_BW - POSIT_ES - 2, 0);
+	f >>= 8 * sizeof(POSIT_BACKING_T);
 
-	int64_t exponent = shift - lz + POSIT_BW;
+	int64_t exponent = exp - lz + 8 * sizeof(POSIT_BACKING_T);
 	return CONCAT(POSIT_SHORT,_build)(sign, exponent, f);
 }
 
@@ -473,21 +480,20 @@ POSIT_T CONCAT(POSIT_SHORT,_mul) (POSIT_T p1, POSIT_T p2) {
 	int64_t shift = shift1 + shift2;
 
 	POSIT_EXTENDED_T f1 = 0
-		| -(POSIT_EXTENDED_T)parts1.s << POSIT_BW
-		| 1ULL << (POSIT_BW - 1)
+		| -(POSIT_EXTENDED_T)parts1.s << (8 * sizeof(POSIT_BACKING_T))
+		| 1ULL << (8 * sizeof(POSIT_BACKING_T) - 1)
 		| (POSIT_BACKING_T)parts1.f >> (1 + parts1.s);
 
 	POSIT_EXTENDED_T f2 = 0
-		| -(POSIT_EXTENDED_T)parts2.s << POSIT_BW
-		| 1ULL << (POSIT_BW - 1)
+		| -(POSIT_EXTENDED_T)parts2.s << (8 * sizeof(POSIT_BACKING_T))
+		| 1ULL << (8 * sizeof(POSIT_BACKING_T) - 1)
 		| (POSIT_BACKING_T)parts2.f >> (1 + parts2.s);
 
 	POSIT_EXTENDED_T f = f1 * f2;
 	uint64_t sign = parts1.s ^ parts2.s;
-	uint64_t lz = clz(f ^ -(POSIT_EXTENDED_T)sign) - (8 * sizeof(f) - 2 * POSIT_BW);
+	uint64_t lz = clz(f ^ -(POSIT_EXTENDED_T)sign);
 	f <<= lz + 1;
-	f >>= POSIT_BW + POSIT_ES + 2;
-	f &= BITRANGE(POSIT_BW - POSIT_ES - 2, 0);
+	f >>= 8 * sizeof(POSIT_BACKING_T);
 	
 	int64_t  exponent = shift - lz + 1;
 	return CONCAT(POSIT_SHORT,_build)(sign, exponent, f);
@@ -552,7 +558,7 @@ void CONCAT3(QUIRE_SHORT,_add_,POSIT_SHORT)(QUIRE_T *q, POSIT_T p) {
 
 	uint64_t bits = 0
 		| 1ULL << 63
-		| (uint64_t)parts.f << (64 - POSIT_BW) >> (1 + parts.s);
+		| (uint64_t)parts.f << 8 * (sizeof(uint64_t) - sizeof(POSIT_BACKING_T)) >> (1 + parts.s);
 
 	uint64_t fill_word = parts.s * -1ULL;
 	

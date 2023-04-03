@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdbool.h>
 #include <assert.h>
 #include <x86intrin.h>
 
@@ -16,15 +17,14 @@
 #define BITRANGE(a, b) ((uint64_t)((__uint128_t)1 << (a)) - (1ULL << (b)))
 #define POSIT_UNPACK(bits) CONCAT(POSIT_SHORT,_unpack)(bits)
 
-#define POSIT_IMPLEMENTATION
-
-#define UNPACKED_POSIT UNPACKED_POSIT
-
 #ifndef POSIT_BW
  #define POSIT_BW 32
 #endif
 
-#define POSIT_ES 2
+#ifndef POSIT_ES
+ #define POSIT_ES 2
+#endif
+
 #define QUIRE_BW (16*POSIT_BW)
 
 #ifndef POSIT_SHORT
@@ -113,6 +113,11 @@ POSIT_T CONCAT(POSIT_SHORT,_sqrt)        (POSIT_T p);
 
 POSIT_T CONCAT(POSIT_SHORT,_mul) (POSIT_T p1, POSIT_T p2);
 POSIT_T CONCAT(POSIT_SHORT,_add) (POSIT_T p1, POSIT_T p2);
+
+bool CONCAT(POSIT_SHORT,_ge)(POSIT_T p1, POSIT_T p2);
+bool CONCAT(POSIT_SHORT,_gt)(POSIT_T p1, POSIT_T p2);
+bool CONCAT(POSIT_SHORT,_le)(POSIT_T p1, POSIT_T p2);
+bool CONCAT(POSIT_SHORT,_lt)(POSIT_T p1, POSIT_T p2);
 
 void CONCAT3(QUIRE_SHORT,_add_,POSIT_SHORT)  (QUIRE_T *q, POSIT_T p);
 void CONCAT3(QUIRE_SHORT,_fmadd_,POSIT_SHORT)(QUIRE_T *q, POSIT_T p1, POSIT_T p2);
@@ -751,6 +756,34 @@ void CONCAT(QUIRE_SHORT,_set_zero)(QUIRE_T *q) {
 	for (int i = 0; i < QUIRE_WORDS - 1; ++i) {
 		q->words[i] = 0;
 	}
+}
+
+bool CONCAT(POSIT_SHORT,_lt)(POSIT_T p1, POSIT_T p2) {
+	return
+	(p1.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)))
+	<
+	(p2.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)));
+}
+
+bool CONCAT(POSIT_SHORT,_le)(POSIT_T p1, POSIT_T p2) {
+	return
+	(p1.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)))
+	<=
+	(p2.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)));
+}
+
+bool CONCAT(POSIT_SHORT,_gt)(POSIT_T p1, POSIT_T p2) {
+	return
+	(p1.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)))
+	>
+	(p2.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)));
+}
+
+bool CONCAT(POSIT_SHORT,_ge)(POSIT_T p1, POSIT_T p2) {
+	return
+	(p1.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)))
+	>=
+	(p2.bits^((POSIT_BACKING_T)1 << (POSIT_BW-1)));
 }
 
 //=========== CONSTANT CLEANUP ===============//

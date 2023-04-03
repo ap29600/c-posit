@@ -3,7 +3,6 @@
 #include <time.h>
 #include <math.h>
 
-
 #include "testing_utils.h"
 double random_double(int64_t max_exponent, bool include_negatives) {
 	return 1.0
@@ -20,9 +19,10 @@ int64_t random_int(int64_t max_modulus, bool include_negatives) {
 
 double absf(double d) { return d >= 0 ? d : -d; }
 
-// Note: it only makes sense for these tests to use BW <= 56, as above this value
-// posit is not uniformly less precise than double, which can lead to false positives.
-#define POSIT_BW 56
+// Note: it only makes sense for these tests to use BW <= 56, as above
+// this value posit is not uniformly less precise than double, and
+// results can't be verified for correctness.
+#define POSIT_BW 32
 #define POSIT_SHORT pos
 #define POSIT_T posit_t
 const uint64_t test_size = 10000;
@@ -93,9 +93,9 @@ bool posit_unary_internal(
 	test t = {.func = func};
 
 	for (uint64_t i = 0; i < test_size; ++i) {
-		double d      = random_double(max_expt, include_negatives);
-		posit_t p   = pos_from_double(d);
-		posit_t r   = posit_fn(p);
+		double d = random_double(max_expt, include_negatives);
+		posit_t p = pos_from_double(d);
+		posit_t r = posit_fn(p);
 		double target = double_fn(pos_to_double(p));
 
 		double low     = pos_to_double(pos_prev(r));
